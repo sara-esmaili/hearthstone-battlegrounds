@@ -1,21 +1,17 @@
-# src/game_engine.py
-
 import json
 import random
 import pygame
 import os
-
+from copy import deepcopy
 from src.models import Minion, Player
 
-BASE_DIR = os.path.dirname(os.path.dirname(__file__))  # bgknowhow-main
-PROJECT_ROOT = os.path.dirname(BASE_DIR)              # hearthstone-battlegrounds
+BASE_DIR = os.path.dirname(os.path.dirname(__file__))
+PROJECT_ROOT = os.path.dirname(BASE_DIR)
 DATA_PATH = os.path.join(PROJECT_ROOT, "data", "minions.json")
-
 
 class GameEngine:
     def __init__(self):
         self.player = Player()
-
         try:
             with open(DATA_PATH, "r", encoding="utf-8") as f:
                 self.minion_pool = json.load(f)
@@ -29,14 +25,12 @@ class GameEngine:
         self.player.max_gold = min(10, 2 + self.player.turn)
         self.player.gold = self.player.max_gold
 
-        # تخفیف Upgrade
         if self.player.upgrade_cost > 2:
             self.player.upgrade_cost -= 1
 
         self.refresh_shop(free=True)
 
     def refresh_shop(self, free=False):
-        """Refresh shop with freeze support"""
         if not free:
             if self.player.gold < 1:
                 print("Not enough gold to refresh!")
@@ -44,26 +38,16 @@ class GameEngine:
             self.player.gold -= 1
 
         shop_size = 3 + (self.player.tavern_tier // 2)
-        new_shop = []
-
-        # کارت‌های فریز شده حفظ شوند
         frozen_cards = [m for m in self.player.shop if m.is_frozen]
-
-        # تعداد جای خالی که نیاز به جایگزینی دارد
         slots_to_fill = shop_size - len(frozen_cards)
 
-        # کارت‌های قابل استفاده
-        available = self.minion_pool.get(
-            f"tier{self.player.tavern_tier}",
-            self.minion_pool.get("tier1", [])
-        )
-
+        available = self.minion_pool.get(f"tier{self.player.tavern_tier}", self.minion_pool.get("tier1", []))
+        new_shop = []
         for _ in range(slots_to_fill):
-            minion = Minion(random.choice(available))
+            minion = Minion(deepcopy(random.choice(available)))
             minion.rect = pygame.Rect(100 + len(new_shop + frozen_cards) * 130, 120, 110, 150)
             new_shop.append(minion)
 
-        # ترکیب کارت‌های فریز و جدید
         self.player.shop = frozen_cards + new_shop
         self._update_shop_positions()
 
@@ -88,21 +72,55 @@ class GameEngine:
         if minion in self.player.shop:
             self.player.shop.remove(minion)
         self.player.hand.append(minion)
+
+        self.check_triple(minion)
         self._update_hand_positions()
         self._update_shop_positions()
+
+    def check_triple(self, bought_minion):
+        """چک کردن Triple و ایجاد Golden + Discover"""
+        name = bought_minion.name
+        same_cards = [m for m in self.player.hand if m.name == name]
+        if len(same_cards) == 3:
+            # حذف کارت‌های عادی
+            for m in same_cards:
+                self.player.hand.remove(m)
+            # ایجاد Golden
+            golden = deepcopy(same_cards[0])
+            golden.is_golden = True
+            golden.attack *= 2
+            golden.health *= 2
+            self.player.hand.append(golden)
+            print(f"Triple! {name} becomes Golden!")
+
+            
+            self.player.discover_queue.append(self.generate_discover_options())
+
+    def generate_discover_options(self):
+        """سه کارت تصادفی Tier بالاتر برای Discover"""
+        tier_next = min(6, self.player.tavern_tier + 1)
+        options = deepcopy(self.minion_pool.get(f"tier{tier_next}", []))
+        return random.sample(options, min(3, len(options)))
+
+    def resolve_discover_choice(self, choice_index):
+        """پس از انتخاب کارت توسط کاربر"""
+        if not self.player.discover_queue:
+            return
+        options = self.player.discover_queue.pop(0)
+        selected = Minion(options[choice_index])
+        self.player.hand.append(selected)
+        self._update_hand_positions()
 
     def play_minion(self, minion):
         if len(self.player.board) >= 7:
             print("Board is full!")
             return
-
         if minion in self.player.hand:
             self.player.hand.remove(minion)
         self.player.board.append(minion)
         self._update_hand_positions()
         self._update_board_positions()
 
-    # موقعیت کارت‌ها
     def _update_hand_positions(self):
         for i, m in enumerate(self.player.hand):
             m.rect.topleft = (100 + i * 130, 320)
